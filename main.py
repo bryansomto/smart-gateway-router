@@ -4,6 +4,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import time
 import httpx
+import statistics
+import redis.asyncio as redis
 
 app = FastAPI(title="Mock Payment Gateways")
 
@@ -57,15 +59,54 @@ GATEWAYS = {
     "interswitch": "http://127.0.0.1:8000/interswitch/charge"
 }
 
+# Connect to local Redis
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+async def record_latency(gateway: str, latency_ms: float):
+    """Stores the latest latency in Redis and keeps only the last 20 requests."""
+    key = f"gateway:{gateway}:latencies"
+    await redis_client.lpush(key, latency_ms)
+    await redis_client.ltrim(key, 0, 19)    # Keep a sliding window of size 20
+
+async def get_gateway_health(gateway: str) -> float:
+    """
+    Calculates a health score using Moving Average and Standard Deviation.
+    Lower score = Faster, more stable gateway.
+    """
+    key = f"gateway:{gateway}:latencies"
+    latencies =  await redis_client.lrange(key, 0, -1)
+
+    if not latencies:
+        return 0.0  # Perfect score if we have no data yet
+
+    latencies = [float(l) for l in latencies]
+    avg_latency = statistics.mean(latencies)
+
+    # Calculate volatility (Standard Deviation)
+    if len(latencies) > 1:
+        volatility_penalty =  statistics.stdev(latencies)
+    else:
+        volatility_penalty = 0.0
+
+    # The ultimate Data Science health score: Average Latency + Volatility
+    return avg_latency + volatility_penalty
+
 # Default routing priority
 ROUTING_PRIORITY = ["paystack", "flutterwave", "interswitch"]
 
 @app.post("/smart-router/charge")
 async def smart_route_payment(request: RouteRequest):
     routing_history = []
+    base_gateways = ["paystack", "flutterwave", "interswitch"]
+
+    # Rank gateways based on their health score
+    health_scores = {gw: await get_gateway_health(gw) for gw in base_gateways}
+
+    # Sort gateways dynamically: Lowest score (healthiest) goes first!
+    dynamic_priority = sorted(health_scores, key=health_scores.get)
 
     async with httpx.AsyncClient() as client:
-        for gateway_name in ROUTING_PRIORITY:
+        for gateway_name in dynamic_priority:
             url = GATEWAYS[gateway_name]
             start_time = time.time()
 
@@ -76,24 +117,28 @@ async def smart_route_payment(request: RouteRequest):
                 latency_ms = (time.time() - start_time) * 1000
 
                 if response.status_code == 200:
+                    # Log healthy latency
+                    await record_latency(gateway_name, latency_ms)
+
                     routing_history.append({
                         "gateway": gateway_name,
                         "status": "success",
                         "latency_ms": round(latency_ms, 2),
+                        "health_score_at_request": round(health_scores[gateway_name], 2)
                     })
 
                     return {
                         "message": "Payment successful",
                         "final_gateway": gateway_name,
+                        "routing_order": dynamic_priority,
                         "routing_history": routing_history,
                     }
                 else:
-                    # Handle the 503 Service Unavailable errors simulated
+                    # Handle the 503 Service Unavailable errors and apply a massive penalty!
+                    await record_latency(gateway_name, 3000)  # 3 seconds penalty for failed requests
                     routing_history.append({
                         "gateway": gateway_name,
                         "status": "failed",
-                        "latency_ms": round(latency_ms, 2),
-                        "error": "Gateway Error"
                     })
 
             except httpx.TimeoutException:
