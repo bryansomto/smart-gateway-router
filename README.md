@@ -8,7 +8,9 @@ No single payment gateway maintains 100% uptime. Merchants lose revenue when the
 
 ## The Solution
 
-This project acts as a high-availability middleware. It intercepts checkout requests and dynamically routes them to the most stable gateway (e.g., Paystack, Flutterwave, Interswitch). It features a built-in "Chaos Monkey" simulation to mimic real-world Nigerian network volatility, including random latency spikes and hard failures.
+This project acts as a high-availability middleware. It intercepts checkout requests and dynamically routes them to the most stable gateway (e.g., Paystack, Flutterwave, Interswitch).
+
+Unlike static fallbacks, this router uses an **Anomaly Detection Engine** backed by **Redis**. It tracks a sliding window of recent transaction latencies, calculates standard deviation and moving averages in real-time, and dynamically penalizes degrading gateways before they trigger a hard timeout.
 
 ## Current Features (Phases 1 - 3)
 
