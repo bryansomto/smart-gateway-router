@@ -47,7 +47,7 @@ Unlike static fallbacks, this router uses an **Anomaly Detection Engine** backed
 4. **Install dependencies:**
 
    ```bash
-   pip install fastapi "uvicorn[standard]" httpx
+   pip install fastapi "uvicorn[standard]" httpx redis
    ```
 5. **Run the server:**
 
